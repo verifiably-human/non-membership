@@ -1,0 +1,328 @@
+{
+  "compiler-version": "0.31.0",
+  "language-version": "0.23.0",
+  "runtime-version": "0.16.0",
+  "circuits": [
+    {
+      "name": "updateRoot",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "newRoot",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "registerMember",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "memberPk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "registerMembersBatch",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "pks",
+          "type": {
+            "type-name": "Vector",
+            "length": 32,
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        },
+        {
+          "name": "count",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "proveNonMembership",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "target",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "proveMembership",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "target",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "localSecretKey",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "getMemberPath",
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "MerkleTreePath",
+        "elements": [
+          {
+            "name": "leaf",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "path",
+            "type": {
+              "type-name": "Vector",
+              "length": 10,
+              "type": {
+                "type-name": "Struct",
+                "name": "MerkleTreePathEntry",
+                "elements": [
+                  {
+                    "name": "sibling",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreeDigest",
+                      "elements": [
+                        {
+                          "name": "field",
+                          "type": {
+                            "type-name": "Field"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "goes_left",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "getPredecessorProof",
+      "arguments": [
+        {
+          "name": "target",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+          {
+            "type-name": "Struct",
+            "name": "IndexedLeaf",
+            "elements": [
+              {
+                "name": "key",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+                }
+              },
+              {
+                "name": "nextKey",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+                }
+              }
+            ]
+          },
+          {
+            "type-name": "Vector",
+            "length": 8,
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "type-name": "Vector",
+            "length": 8,
+            "type": {
+              "type-name": "Boolean"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "getMembershipProof",
+      "arguments": [
+        {
+          "name": "target",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+          {
+            "type-name": "Struct",
+            "name": "IndexedLeaf",
+            "elements": [
+              {
+                "name": "key",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+                }
+              },
+              {
+                "name": "nextKey",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 452312848583266388373324160190187140051835877600158453279131187530910662655
+                }
+              }
+            ]
+          },
+          {
+            "type-name": "Vector",
+            "length": 8,
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "type-name": "Vector",
+            "length": 8,
+            "type": {
+              "type-name": "Boolean"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "indexedRoot",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "admin",
+      "index": 1,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "members",
+      "index": 2,
+      "exported": true,
+      "storage": "HistoricMerkleTree",
+      "depth": 10,
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "proofCount",
+      "index": 3,
+      "exported": true,
+      "storage": "Counter"
+    }
+  ]
+}
