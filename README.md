@@ -2,9 +2,27 @@
 
 Four Compact patterns for proving you're NOT in a set — without revealing who you are.
 
+### ▶ [Run the live demo](https://non-membership.pages.dev/)
+
+Deploy the contracts, register members, and build a real non-membership proof against the preprod
+network — the sparse and indexed Merkle patterns each render the tree as you go, so you can watch
+the authentication path fold from leaf to root. It runs on testnet with real proofs, so it needs a
+Midnight wallet, a proof server, and test tokens first: see
+[Running the live demo](#running-the-live-demo). This repository is what's running underneath.
+
+> [!WARNING]
+> **The keys in this repository are demo keys. Do not deploy them.**
+>
+> The four directories at the repo root (`nullifier-pattern/`, `blocklist-exclusion/`,
+> `sparse-merkle/`, `indexed-merkle/`) hold prover and verifier keys published so the demo is
+> auditable and the build is reproducible. They are **not** production credentials, they carry
+> no security guarantee, and they are tied to demo contracts running on a test network. Anyone
+> can regenerate them from the source here. Generate your own — see
+> [Using this in your own project](#using-this-in-your-own-project).
+
 This repository holds the contracts, their witness implementations, the off-chain tree
-implementations that build the proofs, and instructions for compiling everything. There is no
-DApp or UI here.
+implementations that build the proofs, and instructions for compiling everything. The demo's UI
+lives elsewhere; there is no DApp code here.
 
 ## Patterns
 
@@ -34,7 +52,36 @@ Semaphore v4. No collision risk — each leaf stores its actual key — and dept
 entries rather than key width. The cost is more involved insertion: each new key rewrites the
 predecessor's `nextKey` pointer and inserts a new leaf.
 
-## Prerequisites
+## Running the live demo
+
+The demo generates real zero-knowledge proofs and submits real transactions to Midnight's preprod
+network. Nothing is simulated, so there is some setup. Three things are required:
+
+**1. A Midnight wallet.** Any wallet that implements the Midnight DApp connector works. Two
+options:
+
+| Wallet | Where |
+|--------|-------|
+| Moth | [github.com/shieldedtech/moth-wallet](https://github.com/shieldedtech/moth-wallet) |
+| Lace | [lace.io](https://www.lace.io/) — install the Midnight build |
+
+Whichever you use, create a wallet and switch the network to **preprod**. Save the seed phrase.
+
+**2. A proof server.** ZK proof generation runs locally, not in the browser — the demo expects a
+proof server reachable at `localhost:6300`. Setup instructions:
+[docs.midnight.network/guides/run-proof-server](https://docs.midnight.network/guides/run-proof-server).
+The status indicator at the top of the demo turns green once it can reach it.
+
+**3. Test tokens (tmNIGHT).** Every transaction burns DUST, and DUST accrues from held NIGHT. Claim
+test NIGHT from the Nethermind preprod faucet:
+[midnight-tmnight-preprod.nethermind.dev](https://midnight-tmnight-preprod.nethermind.dev/) — paste
+your wallet's unshielded address. Tokens arrive in a minute or two, then give DUST a few minutes to
+accrue before your first transaction.
+
+You do **not** need the Compact CLI to run the demo; it connects to already-deployed contracts. You
+need it only to build the contracts yourself, below.
+
+## Prerequisites for building
 
 - [Node.js](https://nodejs.org/) v22+
 - [Compact CLI](https://docs.midnight.network/) with compiler v0.31.0+
@@ -103,8 +150,11 @@ compact compile --skip-zk contracts/nullifier-pattern.compact /tmp/check
 
 Each contract's witnesses are implemented in `witnesses/`. They follow the standard Compact
 witness signature — `(context, ...args) => [privateState, returnValue]` — and read from a
-private-state object described at the top of each file. Each module also exports a deterministic
-`ADMIN_SECRET` for demo use; replace it for any real deployment.
+private-state object described at the top of each file.
+
+`localSecretKey` has no fallback: if `privateState.secretKey` is absent it throws rather than
+substituting a default. Supply a real key source — an HSM, an environment-supplied keyfile with
+`0o600` permissions, or a per-deployment `crypto.randomBytes(32)` persisted out of band.
 
 Patterns 3 and 4 need an off-chain tree to build their proofs. Both implementations live in
 `offchain/` and hash with the same domain separators as their contracts, so the roots agree:
@@ -141,11 +191,54 @@ scripts/
 
 compiled/                   Build output (gitignored; npm run compile:all)
 
-blocklist-exclusion/        Published demo keys — prover/verifier keys, zkir,
-indexed-merkle/             and contract-info.json for each pattern.
-nullifier-pattern/          Reproducible from this source: all 32 key files
-sparse-merkle/              rebuild byte-for-byte with compiler 0.31.1.
+blocklist-exclusion/        Published DEMO keys — see the warning above.
+indexed-merkle/             Prover/verifier keys, zkir, and contract-info.json
+nullifier-pattern/          per pattern. Published for auditability, not for
+sparse-merkle/              reuse. Generate your own before deploying.
 ```
+
+## The published demo keys
+
+The four per-pattern directories at the repo root are build artifacts from the deployed demo,
+committed so that anyone can check the demo against its source.
+
+**What they're for.** Verifying that the deployed demo runs the contracts in this repository, and
+nothing else. Rebuild from source and compare:
+
+```bash
+npm run compile:all
+cmp compiled/sparse-merkle/keys/proveNonMembership.verifier \
+    sparse-merkle/keys/proveNonMembership.verifier
+```
+
+With compiler 0.31.1, all 32 prover/verifier key files and all 32 zkir files reproduce
+byte-for-byte. The four `contract-info.json` files differ by one line — the committed set was
+built with 0.31.0, so `"compiler-version"` reads `0.31.0` rather than `0.31.1`. The circuit
+definitions in them are identical.
+
+**What they're not.** They are not production credentials and carry no security guarantee. They
+belong to demo contracts on a test network, they are public, and anyone can regenerate them.
+Verifier keys pin circuit identity, so reusing these would pin your deployment to *these*
+circuits — including their demo-scale parameters (depth-8 trees, 256 leaf positions, an
+8-entry blocklist snapshot) and their admin model, in which a single key set by the constructor
+controls registration and root updates.
+
+They are also large: `sparse-merkle/keys/registerMembersBatch.prover` alone is 36.7 MB, and the
+four directories total roughly 250 MB. That is most of this repository's clone size.
+
+## Using this in your own project
+
+1. Copy the contract and its witness module, and adjust the tree depths and batch sizes — the
+   values here are tuned for demo readability and proof speed, not production capacity. Each
+   contract's header comment says what a production deployment would want instead.
+2. Review the admin model. All four contracts set `admin` in the constructor from
+   `localSecretKey()` and gate registration behind it. That is a single point of failure, fine
+   for a demo and probably not for you.
+3. Run `npm run compile:all` to generate **your own** keys into `compiled/`. Never ship the ones
+   in this repository.
+4. Read Pattern 3's own caveats before choosing it — leaf positions are hash-derived, so it
+   carries collision risk that Pattern 4 does not. Pattern 4 (indexed Merkle) is the
+   production-grade choice.
 
 ## License
 
