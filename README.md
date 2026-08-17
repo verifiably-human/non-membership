@@ -14,11 +14,12 @@ Midnight wallet, a proof server, and test tokens first: see
 > **The keys in this repository are demo keys. Do not deploy them.**
 >
 > The four directories at the repo root (`nullifier-pattern/`, `blocklist-exclusion/`,
-> `sparse-merkle/`, `indexed-merkle/`) hold prover and verifier keys published so the demo is
-> auditable and the build is reproducible. They are **not** production credentials, they carry
-> no security guarantee, and they are tied to demo contracts running on a test network. Anyone
-> can regenerate them from the source here. Generate your own — see
-> [Using this in your own project](#using-this-in-your-own-project).
+> `sparse-merkle/`, `indexed-merkle/`) hold the prover and verifier keys the live demo fetches at
+> runtime. They are **not** production credentials, they carry no security guarantee, and they are
+> tied to demo contracts running on a test network. Anyone can regenerate them from the source
+> here. Generate your own — see [Using this in your own project](#using-this-in-your-own-project).
+> If you maintain this repository, read [The published demo keys](#the-published-demo-keys) before
+> touching those directories.
 
 This repository holds the contracts, their witness implementations, the off-chain tree
 implementations that build the proofs, and instructions for compiling everything. The demo's UI
@@ -191,18 +192,31 @@ scripts/
 
 compiled/                   Build output (gitignored; npm run compile:all)
 
-blocklist-exclusion/        Published DEMO keys — see the warning above.
+blocklist-exclusion/        DEMO keys, served to the live demo at runtime.
 indexed-merkle/             Prover/verifier keys, zkir, and contract-info.json
-nullifier-pattern/          per pattern. Published for auditability, not for
-sparse-merkle/              reuse. Generate your own before deploying.
+nullifier-pattern/          per pattern. Do not move or rename — the demo
+sparse-merkle/              fetches them. Never reuse them in your own project.
 ```
 
 ## The published demo keys
 
-The four per-pattern directories at the repo root are build artifacts from the deployed demo,
-committed so that anyone can check the demo against its source.
+The four per-pattern directories at the repo root are build artifacts from the deployed demo. They
+serve two purposes, and the first one is load-bearing.
 
-**What they're for.** Verifying that the deployed demo runs the contracts in this repository, and
+> [!IMPORTANT]
+> **The live demo fetches these files at runtime. Do not move, rename, or delete them.**
+>
+> Prover keys reach 36.7 MB, over Cloudflare Pages' 25 MB per-file limit, so the demo cannot ship
+> them in its own bundle. It fetches them from this repository over `raw.githubusercontent.com`
+> instead. This repository is the demo's asset host, not just a published record of it.
+>
+> The demo pins a specific commit (`KEYS_COMMIT_SHA`), so ordinary commits here cannot break it —
+> only a deliberate SHA bump on the demo side picks up new artifacts. Rewriting history that a
+> pinned SHA points at would break it.
+
+**What they're for, first:** serving the deployed demo, as above.
+
+**What they're for, second:** verifying that the demo runs the contracts in this repository and
 nothing else. Rebuild from source and compare:
 
 ```bash
