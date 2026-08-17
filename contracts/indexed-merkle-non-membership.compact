@@ -1,0 +1,236 @@
+// ==========================================================================
+// Pattern 4: Indexed Merkle Tree Non-Membership Proof
+// ==========================================================================
+//
+// Prove that a key is NOT in a set by exhibiting a predecessor leaf where
+// low.key < target < low.nextKey. Leaves are sorted by key and store a
+// pointer to the next-larger key. This is the structure used by Aztec,
+// Polygon ID, and Semaphore-v4 — production-grade non-membership.
+//
+// Why indexed Merkle beats prefix-sparse (Pattern 3):
+//   - No collision risk: each leaf stores its actual key, so leaf positions
+//     are unique by construction
+//   - Tree depth scales with active entries (~log N), not key bit-width
+//   - No false rejections from birthday-paradox collisions
+//
+// The cost: insertion is meaningfully more involved. Each new key requires
+// two Merkle updates — the predecessor leaf's nextKey pointer gets
+// rewritten, and a new leaf is inserted with the predecessor's old nextKey.
+// This demo does insertion admin-side off-chain (like Pattern 3); a
+// production deployment would add an in-circuit insertion proof
+// (predecessor inclusion + range + two-leaf root transition).
+//
+// Architecture (this demo):
+//   On-chain:  Only the indexed tree root (Bytes<32>)
+//   Off-chain: Sorted leaf store maintained by an admin service
+//   Per-user:  Witness fetches the predecessor leaf + auth path at proof time
+//
+// Key type:
+//   Uint<248> — 31 bytes of entropy. Fits in Compact's Field. Supports
+//   native `<` comparison. Collision bound ~2^124. Users derive keys by
+//   truncating a 256-bit hash to 248 bits.
+//
+// Sentinel:
+//   The off-chain tree initializes with one sentinel leaf at position 0:
+//     { key: 0, nextKey: 2^248 - 1 }
+//   so every real key insertion lives between two existing leaves.
+// ==========================================================================
+
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// Tree depth = 8 means 2^8 = 256 active leaf positions.
+// Same depth as Pattern 3 for like-for-like comparison.
+// Production deployment would use depth 20+.
+
+// --- Types ---
+
+struct IndexedLeaf {
+  key: Uint<248>,
+  nextKey: Uint<248>
+}
+
+// --- Ledger ---
+
+export ledger indexedRoot: Bytes<32>;
+export sealed ledger admin: Bytes<32>;
+export ledger members: HistoricMerkleTree<10, Bytes<32>>;
+export ledger proofCount: Counter;
+
+// --- Witnesses ---
+
+witness localSecretKey(): Bytes<32>;
+witness getMemberPath(pk: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+// Returns the predecessor leaf + auth path that bracket the target key.
+// The off-chain tree provides:
+//   - low: the sorted-tree predecessor leaf (low.key < target < low.nextKey)
+//   - siblings: 8 sibling hashes from leaf position to root
+//   - directions: which side of each level (false=left, true=right)
+witness getPredecessorProof(target: Uint<248>):
+  [IndexedLeaf, Vector<8, Bytes<32>>, Vector<8, Boolean>];
+
+// Returns the leaf and path for an exact-key membership proof.
+//   - leaf.key == target  (the witness asserts this; the circuit re-verifies)
+//   - siblings + directions reconstruct indexedRoot
+witness getMembershipProof(target: Uint<248>):
+  [IndexedLeaf, Vector<8, Bytes<32>>, Vector<8, Boolean>];
+
+// --- Helpers ---
+
+circuit getPublicKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "indexed:pk:"), sk
+  ]);
+}
+
+circuit requireAdmin(): [] {
+  const sk = localSecretKey();
+  assert(getPublicKey(sk) == admin, "Not admin");
+}
+
+// Hash an indexed leaf to Bytes<32>. Domain-separated to avoid collisions
+// with internal nodes or pubkey hashing.
+circuit hashLeaf(leaf: IndexedLeaf): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    pad(32, "indexed:leaf:"),
+    (leaf.key as Field) as Bytes<32>,
+    (leaf.nextKey as Field) as Bytes<32>
+  ]);
+}
+
+// Hash two children to produce a parent node.
+circuit hashNode(left: Bytes<32>, right: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    pad(32, "indexed:node:"), left, right
+  ]);
+}
+
+// --- Admin circuits ---
+
+constructor() {
+  const sk = localSecretKey();
+  admin = disclose(getPublicKey(sk));
+  // indexedRoot starts as default (all zeros). The admin must call
+  // updateRoot() once with the genesis root computed off-chain — the
+  // tree containing the sentinel leaf { key: 0, nextKey: 2^248 - 1 }
+  // at position 0 and empty leaves elsewhere.
+}
+
+// Update the indexed tree root after off-chain insertion.
+// The admin maintains the sorted leaf store and computes the new root.
+// In production, this would carry a proof of valid insertion (predecessor
+// inclusion + range + two-leaf root transition). This demo trusts the admin.
+export circuit updateRoot(newRoot: Bytes<32>): [] {
+  requireAdmin();
+  indexedRoot = disclose(newRoot);
+}
+
+export circuit registerMember(memberPk: Bytes<32>): [] {
+  requireAdmin();
+  members.insert(disclose(memberPk));
+}
+
+// Batch-register up to 32 members in a single transaction.
+// Pass the actual count and pad unused slots with zeros.
+// Same pattern as Pattern 3 — call repeatedly to fill the tree.
+export circuit registerMembersBatch(
+  pks: Vector<32, Bytes<32>>,
+  count: Uint<8>
+): [] {
+  requireAdmin();
+  for (const i of 0..32) {
+    if (disclose(i < count)) {
+      members.insert(disclose(pks[i]));
+    }
+  }
+}
+
+// --- User circuits ---
+
+// Prove that a key is NOT in the indexed Merkle tree.
+//
+// The circuit verifies:
+//   1. The caller is a registered member (anonymous via Merkle proof)
+//   2. The witness's predecessor leaf brackets the target:
+//        low.key < target < low.nextKey
+//   3. The predecessor leaf is present in the indexed tree at the current root
+//
+// If all three hold, no entry equal to `target` can exist in the tree:
+// the sorted ordering would require it to sit between low and low.nextKey,
+// but low's nextKey is some other value, not target.
+export circuit proveNonMembership(target: Uint<248>): [] {
+  const sk = localSecretKey();
+  const pk = getPublicKey(sk);
+
+  // Step 1: Anonymous member check
+  const path = getMemberPath(pk);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(members.checkRoot(disclose(root)), "Not a registered member");
+
+  // Step 2: Predecessor witness
+  const proof = getPredecessorProof(target);
+  const low = proof[0];
+  const siblings = proof[1];
+  const directions = proof[2];
+
+  // Step 3: Range bracket. Both compares are native Uint<248> — supported.
+  assert(low.key < target, "Predecessor key >= target");
+  assert(target < low.nextKey, "Target >= predecessor's nextKey");
+
+  // Step 4: Verify predecessor is in the tree.
+  // Same fold pattern as Pattern 3 — accumulate the hash from leaf to root,
+  // then compare against the on-chain root.
+  const leafHash = hashLeaf(low);
+  const computedRoot = fold(
+    (acc: Bytes<32>, sibling: Bytes<32>, goesRight: Boolean) =>
+      goesRight ? hashNode(sibling, acc) : hashNode(acc, sibling),
+    leafHash,
+    siblings,
+    directions
+  );
+
+  assert(computedRoot == indexedRoot, "Predecessor proof does not match on-chain root");
+
+  proofCount.increment(1);
+}
+
+// Prove that a key IS in the indexed Merkle tree.
+//
+// Verifies:
+//   1. The caller is a registered member (anonymous via Merkle proof)
+//   2. The witness's leaf has the exact target key
+//   3. That leaf is present in the indexed tree at the current root
+export circuit proveMembership(target: Uint<248>): [] {
+  const sk = localSecretKey();
+  const pk = getPublicKey(sk);
+
+  // Step 1: Anonymous member check
+  const path = getMemberPath(pk);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(members.checkRoot(disclose(root)), "Not a registered member");
+
+  // Step 2: Membership witness
+  const proof = getMembershipProof(target);
+  const leaf = proof[0];
+  const siblings = proof[1];
+  const directions = proof[2];
+
+  // Step 3: Witness must point at exactly the target key
+  assert(leaf.key == target, "Witness leaf key does not match target");
+
+  // Step 4: Verify the leaf is in the tree
+  const leafHash = hashLeaf(leaf);
+  const computedRoot = fold(
+    (acc: Bytes<32>, sibling: Bytes<32>, goesRight: Boolean) =>
+      goesRight ? hashNode(sibling, acc) : hashNode(acc, sibling),
+    leafHash,
+    siblings,
+    directions
+  );
+
+  assert(computedRoot == indexedRoot, "Membership proof does not match on-chain root");
+
+  proofCount.increment(1);
+}

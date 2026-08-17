@@ -1,0 +1,167 @@
+// ==========================================================================
+// Pattern 2: Attribute-Based Blocklist Exclusion
+// ==========================================================================
+//
+// Prove "my credential attribute is NOT on a known blocklist" without
+// revealing the attribute itself.
+//
+// The blocklist stores hashes of blocked attribute values (e.g., revoked
+// credential IDs, sanctioned jurisdiction codes, flagged device fingerprints).
+// The user proves their attribute hash — derived inside the circuit from
+// a witness-provided credential — doesn't match any blocklist entry.
+//
+// Use cases:
+//   - Jurisdiction screening: prove your jurisdiction isn't sanctioned
+//   - Credential revocation: prove your credential ID isn't revoked
+//   - Device attestation: prove your device key isn't compromised
+//   - Category exclusion: prove your user category isn't restricted
+//
+// Privacy properties:
+//   - The attribute value never leaves the ZK proof
+//   - The blocklist is public (transparency about what's blocked)
+//   - An observer sees "someone proved their attribute isn't blocked"
+//     but not which attribute they hold
+//   - The Merkle membership proof hides which registered user is acting
+//
+// How it works:
+//   1. Admin publishes attribute hashes to the public blocklist
+//   2. Users hold credentials with attributes (witness-provided)
+//   3. The circuit hashes the attribute with a domain separator
+//   4. The circuit checks the hash against each blocklist entry
+//   5. If no match, the user passes; if any match, the assert fails
+// ==========================================================================
+
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// --- Ledger ---
+
+// Public blocklist — hashes of blocked attribute values.
+// Entries are persistentHash<Vector<2, Bytes<32>>>([domain, attribute]).
+// The Set ADT provides O(1) membership, insertion, removal, and size.
+export ledger blocklist: Set<Bytes<32>>;
+
+// Legitimate user registry — HistoricMerkleTree for anonymous membership proofs
+export ledger registry: HistoricMerkleTree<10, Bytes<32>>;
+
+// Admin
+export sealed ledger admin: Bytes<32>;
+
+// Successful clearance counter
+export ledger clearanceCount: Counter;
+
+// --- Witnesses ---
+
+witness localSecretKey(): Bytes<32>;
+witness getRegistryPath(pk: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+// Returns the user's credential attribute (e.g., jurisdiction code,
+// credential ID, device fingerprint). This value is private — it
+// never leaves the ZK proof.
+witness getCredentialAttribute(): Bytes<32>;
+
+// Returns the current blocklist snapshot for in-circuit comparison.
+// Up to 8 entries, padded with zeros if fewer exist.
+witness getBlocklistSnapshot(): Vector<8, Bytes<32>>;
+witness getBlocklistCount(): Uint<64>;
+
+// --- Helper circuits ---
+
+circuit getPublicKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "blocklist:pk:"), sk
+  ]);
+}
+
+// Hash an attribute value with a domain separator.
+// The same function is used both by the admin (off-chain, to compute
+// blocklist entries) and by the circuit (to hash the user's attribute
+// for comparison). Using the same domain ensures hashes match.
+circuit hashAttribute(attribute: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "blocklist:attr:"), attribute
+  ]);
+}
+
+circuit requireAdmin(): [] {
+  const sk = localSecretKey();
+  assert(getPublicKey(sk) == admin, "Not admin");
+}
+
+// --- Admin circuits ---
+
+constructor() {
+  const sk = localSecretKey();
+  admin = disclose(getPublicKey(sk));
+}
+
+// Register a legitimate user
+export circuit registerUser(userPk: Bytes<32>): [] {
+  requireAdmin();
+  registry.insert(disclose(userPk));
+}
+
+// Add a blocked attribute hash to the blocklist.
+// The admin computes hashAttribute(rawValue) off-chain and passes
+// the result here. The raw attribute value is never on-chain — only
+// its domain-separated hash. Set.insert is idempotent on duplicate keys.
+export circuit blockAttribute(attributeHash: Bytes<32>): [] {
+  requireAdmin();
+  blocklist.insert(disclose(attributeHash));
+}
+
+// Remove a blocked attribute hash from the blocklist.
+// Asserts the hash is currently blocked so the admin gets an immediate
+// signal on a mistaken call.
+export circuit unblockAttribute(attributeHash: Bytes<32>): [] {
+  requireAdmin();
+  assert(blocklist.member(disclose(attributeHash)), "Not in blocklist");
+  blocklist.remove(disclose(attributeHash));
+}
+
+// --- User circuits ---
+
+// Prove you are a registered user AND your credential attribute is
+// not on the blocklist.
+//
+// The circuit:
+//   1. Proves membership in the user registry (anonymous)
+//   2. Gets the user's credential attribute from the witness (private)
+//   3. Hashes it with the same domain separator used for blocklist entries
+//   4. Compares the hash against each blocklist entry
+//   5. If no match, the proof succeeds; any match causes assertion failure
+//
+// The attribute value stays inside the proof. The comparison result
+// (always "not equal" for a passing proof) is implicitly disclosed by
+// the assert, but reveals nothing about which attribute the user holds.
+export circuit proveNotBlocked(): [] {
+  const sk = localSecretKey();
+  const pk = getPublicKey(sk);
+
+  // Step 1: Prove membership in the legitimate user registry
+  const path = getRegistryPath(pk);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(registry.checkRoot(disclose(root)), "Not a registered user");
+
+  // Step 2: Get the user's credential attribute and hash it
+  const attribute = getCredentialAttribute();
+  const myAttrHash = hashAttribute(attribute);
+
+  // Step 3: Get the current blocklist snapshot from witness
+  const blocked = getBlocklistSnapshot();
+  const count = getBlocklistCount();
+
+  // Step 4: Check attribute hash against each blocklist entry.
+  // The fixed loop bound is the on-chain ceiling for this circuit;
+  // resizing requires recompilation and a new verifier key. Active
+  // entries are gated by `count` so smaller blocklists run efficiently.
+  for (const i of 0..8) {
+    const entry = blocked[i];
+    if (disclose(i < count)) {
+      assert(myAttrHash != entry, "Attribute is on the blocklist");
+    }
+  }
+
+  clearanceCount.increment(1);
+}

@@ -1,0 +1,123 @@
+// ==========================================================================
+// Pattern 1: Nullifier-Based "Already-Used" Prevention
+// ==========================================================================
+//
+// The most natural non-membership pattern on Midnight. Instead of proving
+// "I am NOT in set S," you prove "my deterministic nullifier has NOT been
+// published on-chain." The chain itself enforces uniqueness — no off-chain
+// data structure needed.
+//
+// Use cases:
+//   - Anonymous voting (one vote per identity)
+//   - Credential single-use (coupon redemption, ticket entry)
+//   - Double-spend prevention in private token schemes
+//
+// How it works:
+//   1. User holds a secret key (witness data, never disclosed)
+//   2. User derives a deterministic nullifier: hash(domain, secret, context)
+//   3. Circuit checks the nullifier is NOT already in the on-chain Set
+//   4. Circuit inserts the nullifier, permanently marking it "used"
+//
+// Privacy properties:
+//   - The nullifier is a one-way persistentHash of the secret key —
+//     recovering the secret requires inverting the hash (preimage-resistant)
+//   - Domain separation prevents cross-contract correlation
+//   - An observer sees THAT an action occurred, not WHO performed it
+//
+// Scaling on Midnight:
+//   Compact's Set<T> ADT provides amortized constant-time membership
+//   and insertion. The spent-nullifier set grows monotonically with use,
+//   but membership checks remain O(1) regardless of size. This is the
+//   pattern's central advantage over off-chain accumulator schemes.
+// ==========================================================================
+
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// --- Types ---
+
+export enum ActionType { vote, redeem, claim }
+
+// --- Ledger ---
+
+// Spent nullifiers — public by design. Each nullifier is a one-way hash
+// that does not reveal the secret used to derive it.
+export ledger spentNullifiers: Set<Bytes<32>>;
+
+// Eligible members — HistoricMerkleTree so proofs remain valid after
+// new members are added. Depth 10 = up to 1024 members.
+export ledger members: HistoricMerkleTree<10, Bytes<32>>;
+
+// Admin for member registration
+export sealed ledger admin: Bytes<32>;
+
+// Action counter for observability
+export ledger actionCount: Counter;
+
+// --- Witnesses ---
+
+witness localSecretKey(): Bytes<32>;
+witness getMemberPath(pk: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+// --- Helper circuits ---
+
+circuit getPublicKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "nonmem:pk:"), sk
+  ]);
+}
+
+// Derive a nullifier scoped to a specific action type.
+// Different action types produce different nullifiers from the same
+// secret, so a user who voted cannot be linked to the same user
+// who redeemed a coupon.
+circuit deriveNullifier(sk: Bytes<32>, action: ActionType): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    pad(32, "nonmem:nullifier:"),
+    sk,
+    (action as Field) as Bytes<32>
+  ]);
+}
+
+circuit requireAdmin(): [] {
+  const sk = localSecretKey();
+  assert(getPublicKey(sk) == admin, "Not admin");
+}
+
+// --- Exported circuits ---
+
+constructor() {
+  const sk = localSecretKey();
+  admin = disclose(getPublicKey(sk));
+}
+
+// Admin registers an eligible member by their public key
+export circuit registerMember(memberPk: Bytes<32>): [] {
+  requireAdmin();
+  members.insert(disclose(memberPk));
+}
+
+// Perform a one-shot action. The user proves:
+//   1. They are a registered member (Merkle membership proof)
+//   2. They have NOT already performed this action (nullifier not in Set)
+// Then the nullifier is recorded, preventing repeat actions.
+export circuit performAction(action: ActionType): [] {
+  const sk = localSecretKey();
+  const pk = getPublicKey(sk);
+
+  // Step 1: Prove membership in the eligible set
+  const path = getMemberPath(pk);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(members.checkRoot(disclose(root)), "Not a registered member");
+
+  // Step 2: Derive the action-specific nullifier
+  const nul = deriveNullifier(sk, action);
+
+  // Step 3: Check non-membership — the nullifier must NOT be in the set
+  assert(!spentNullifiers.member(disclose(nul)), "Action already performed");
+
+  // Step 4: Record the nullifier (now it IS a member — future attempts fail)
+  spentNullifiers.insert(disclose(nul));
+  actionCount.increment(1);
+}
