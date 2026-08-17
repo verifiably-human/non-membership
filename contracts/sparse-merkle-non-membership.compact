@@ -1,0 +1,200 @@
+// ==========================================================================
+// Pattern 3: Sparse Merkle Tree Non-Membership Proof
+// ==========================================================================
+//
+// Prove that an element is NOT in a large set by showing that the
+// corresponding leaf in a sparse Merkle tree is empty (default value).
+//
+// This is the general-purpose non-membership technique from the ZK
+// literature, adapted for Compact's constraint model. It works for
+// arbitrarily large sets (2^depth capacity) but requires significant
+// off-chain infrastructure.
+//
+// Architecture:
+//   On-chain:  Only the sparse tree root (Bytes<32>)
+//   Off-chain: Full sparse Merkle tree maintained by a service
+//   Per-user:  Witness fetches the authentication path at proof time
+//
+// How sparse Merkle trees work:
+//   - A tree of depth D has 2^D leaf positions
+//   - Each leaf position maps to an element via hash: position = H(element)
+//   - Empty leaves hold a default value (all zeros)
+//   - To prove non-membership: show the leaf at H(element) is empty
+//   - The authentication path (sibling hashes) lets the circuit recompute
+//     the root and verify it matches the on-chain root
+//
+// Compact idiom: fold instead of mutable accumulators
+//   Compact uses `const` for all bindings — you cannot accumulate a hash
+//   through a loop with mutable state. But Compact's built-in `fold`
+//   expression carries an accumulator across a vector traversal, exactly
+//   like the stdlib's own `merkleTreePathRoot` implementation. The circuit
+//   folds from leaf to root in one expression, computing the root hash
+//   directly without needing pre-computed intermediates from the witness.
+//
+// Use cases:
+//   - Large revocation lists (thousands of entries)
+//   - Sanctions screening against large databases
+//   - Proving absence from any arbitrary set
+//
+// Limitations:
+//   - Requires an off-chain service to maintain the full tree
+//   - Tree updates (insertions/deletions) require updating the on-chain root
+//   - Circuit cost is O(depth) — each level adds a hash verification
+//   - The off-chain service sees which position is queried (mitigatable
+//     by fetching the entire tree or multiple paths)
+// ==========================================================================
+
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// Tree depth = 8 means 2^8 = 256 leaf positions.
+// Production use would likely need depth 20+ (1M+ positions).
+// Keeping it small here for readability and proof generation speed.
+
+// --- Ledger ---
+
+// The root of the sparse Merkle tree. Updated by the admin whenever
+// the tree changes (elements added or removed).
+export ledger sparseRoot: Bytes<32>;
+
+// Admin identity for root updates
+export sealed ledger admin: Bytes<32>;
+
+// Registry of legitimate users (for anonymous authentication)
+export ledger members: HistoricMerkleTree<10, Bytes<32>>;
+
+// Counter of successful proofs
+export ledger proofCount: Counter;
+
+// --- Witnesses ---
+
+witness localSecretKey(): Bytes<32>;
+witness getMemberPath(pk: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+// Returns the sparse Merkle tree proof for a given element.
+// The off-chain service provides:
+//   - leafValue: the value at position H(element) — should be all zeros
+//     for non-membership
+//   - siblings: the 8 sibling hashes along the path from leaf to root
+//   - directions: which side of each level the path follows (false=left, true=right)
+//
+// No pre-computed intermediates needed — the circuit computes the root
+// directly using fold.
+witness getSparseProof(element: Bytes<32>):
+  [Bytes<32>, Vector<8, Bytes<32>>, Vector<8, Boolean>];
+
+// --- Helper circuits ---
+
+circuit getPublicKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "sparse:pk:"), sk
+  ]);
+}
+
+circuit requireAdmin(): [] {
+  const sk = localSecretKey();
+  assert(getPublicKey(sk) == admin, "Not admin");
+}
+
+// Hash two children to produce a parent node.
+// Domain-separated to avoid collisions with leaf hashing.
+circuit hashNode(left: Bytes<32>, right: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    pad(32, "sparse:node:"), left, right
+  ]);
+}
+
+// Shared body of proveNonMembership and proveMembership. Verifies the
+// caller is a registered member, gets the sparse proof from the witness,
+// folds leaf-to-root, and confirms the recomputed root equals sparseRoot.
+// Returns the leaf value for the caller to assert on (empty vs. non-empty).
+circuit verifySparseMemberAndPath(element: Bytes<32>): Bytes<32> {
+  const sk = localSecretKey();
+  const pk = getPublicKey(sk);
+
+  // Anonymous member check
+  const path = getMemberPath(pk);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(members.checkRoot(disclose(root)), "Not a registered member");
+
+  // Sparse Merkle proof from the off-chain service
+  const proof = getSparseProof(element);
+  const leafValue = proof[0];
+  const siblings = proof[1];
+  const directions = proof[2];
+
+  // Fold leaf to root. Multi-vector fold iterates over siblings and
+  // directions in lockstep. The accumulator carries the running hash
+  // upward through the tree.
+  const computedRoot = fold(
+    (acc: Bytes<32>, sibling: Bytes<32>, goesRight: Boolean) =>
+      goesRight ? hashNode(sibling, acc) : hashNode(acc, sibling),
+    leafValue,
+    siblings,
+    directions
+  );
+
+  assert(computedRoot == sparseRoot, "Computed root does not match on-chain root");
+  return leafValue;
+}
+
+// --- Admin circuits ---
+
+constructor() {
+  const sk = localSecretKey();
+  admin = disclose(getPublicKey(sk));
+  // Initial root is the root of an all-empty tree.
+  // The admin must compute this off-chain and set it via updateRoot.
+}
+
+// Update the sparse tree root after off-chain tree modification.
+// The admin is trusted to compute the correct root. In a production
+// system, you would add a proof that the update is valid (e.g., by
+// verifying the old leaf, new leaf, and path against both old and new roots).
+export circuit updateRoot(newRoot: Bytes<32>): [] {
+  requireAdmin();
+  sparseRoot = disclose(newRoot);
+}
+
+// Register a single legitimate user in the membership tree
+export circuit registerMember(memberPk: Bytes<32>): [] {
+  requireAdmin();
+  members.insert(disclose(memberPk));
+}
+
+// Batch-register up to 32 members in a single transaction.
+// Pass the actual count and pad unused slots with zeros.
+// Max tree capacity is 2^10 = 1024; call this up to 32 times to fill.
+export circuit registerMembersBatch(
+  pks: Vector<32, Bytes<32>>,
+  count: Uint<8>
+): [] {
+  requireAdmin();
+  for (const i of 0..32) {
+    if (disclose(i < count)) {
+      members.insert(disclose(pks[i]));
+    }
+  }
+}
+
+// --- User circuits ---
+
+// Prove that an element is NOT in the sparse Merkle tree.
+// The user provides an element; the witness provides the authentication
+// path. The shared helper verifies the path resolves to the on-chain root;
+// this circuit additionally asserts the leaf is empty.
+export circuit proveNonMembership(element: Bytes<32>): [] {
+  const leafValue = verifySparseMemberAndPath(element);
+  assert(leafValue == pad(32, ""), "Leaf is not empty — element IS in the set");
+  proofCount.increment(1);
+}
+
+// Prove that an element IS in the sparse Merkle tree.
+// Same path verification as proveNonMembership; the membership condition
+// is that the leaf is NOT empty.
+export circuit proveMembership(element: Bytes<32>): [] {
+  const leafValue = verifySparseMemberAndPath(element);
+  assert(leafValue != pad(32, ""), "Leaf is empty — element is NOT in the set");
+  proofCount.increment(1);
+}

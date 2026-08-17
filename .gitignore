@@ -19,3 +19,20 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+
+# Compact build output — regenerate with `npm run compile:all`.
+# The published demo keys live in the per-pattern directories at the repo root.
+compiled/
+*.log
+.env
+
+# Compact tooling
+.midnight-expert/
+
+# macOS
+.DS_Store
