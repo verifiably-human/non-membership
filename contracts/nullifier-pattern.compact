@@ -108,6 +108,7 @@ export circuit performAction(action: ActionType): [] {
 
   // Step 1: Prove membership in the eligible set
   const path = getMemberPath(pk);
+  assert(path.leaf == pk, "Member path is not for this key");
   const root = merkleTreePathRoot<10, Bytes<32>>(path);
   assert(members.checkRoot(disclose(root)), "Not a registered member");
 

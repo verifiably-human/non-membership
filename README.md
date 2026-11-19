@@ -37,18 +37,18 @@ predecessor's `nextKey` pointer and inserts a new leaf.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v22+
-- [Compact CLI](https://docs.midnight.network/) with compiler v0.31.0+
+- [Compact CLI](https://docs.midnight.network/) with compiler 0.36.1 (ledger 9)
 
 Verify your installation:
 
 ```bash
 compact --version          # CLI version, e.g. 0.5.1
-compact compile --version  # compiler version, e.g. 0.31.1
+compact compile --version  # compiler version, e.g. 0.36.1
 compact check              # check for a newer compiler
 ```
 
-All four contracts declare `pragma language_version >= 0.23;` and are verified to compile with
-compiler 0.31.1.
+All four contracts declare `pragma language_version >= 0.23;` and are built with compiler 0.36.1
+(ledger 9, compact-runtime 0.21), which `scripts/compile-all.sh` pins.
 
 ## Compiling
 
@@ -69,7 +69,8 @@ compiled/<name>/keys/<circuit>.verifier PLONK verifier key
 compiled/<name>/compiler/contract-info.json  circuit metadata
 ```
 
-`compiled/` is gitignored — it is build output, ~138 MB, and reproducible from this source. The
+`compiled/` is gitignored — it is build output, ~1.2 GB, and reproducible from this source.
+Compiler 0.36.1 writes prover keys uncompressed; the largest are ~172 MB. The
 published demo keys live in the per-pattern directories at the repo root (see below).
 
 To compile a single contract, pass its base name:
@@ -81,7 +82,7 @@ scripts/compile-all.sh indexed-merkle-non-membership
 Or invoke the compiler directly:
 
 ```bash
-compact compile contracts/nullifier-pattern.compact compiled/nullifier-pattern
+compact compile +0.36.1 contracts/nullifier-pattern.compact compiled/nullifier-pattern
 ```
 
 Proving-key generation dominates compile time. For a fast syntax and type check that skips it:
@@ -124,6 +125,15 @@ it leaf-to-root with the same primitives the circuit uses, and confirm the root 
 npm test
 ```
 
+Regression tests for the membership and sparse-proof bindings run each gated circuit as a
+registered member (accepted) and as an outsider or with a misplaced proof (refused). They load
+`compiled/`, so compile first:
+
+```bash
+npm run compile:all
+npm run test:binding
+```
+
 ## Repository layout
 
 ```
@@ -136,6 +146,9 @@ offchain/
   __test__/
     indexed-merkle-roundtrip.ts   Consistency check against circuit hashing
 
+tests/
+  membership-binding.test.mjs     Membership and sparse-proof binding regressions
+
 scripts/
   compile-all.sh            Compile every contract into compiled/
 
@@ -143,8 +156,10 @@ compiled/                   Build output (gitignored; npm run compile:all)
 
 blocklist-exclusion/        Published demo keys — prover/verifier keys, zkir,
 indexed-merkle/             and contract-info.json for each pattern.
-nullifier-pattern/          Reproducible from this source: all 32 key files
-sparse-merkle/              rebuild byte-for-byte with compiler 0.31.1.
+nullifier-pattern/          These back the deployed demo and were built with
+sparse-merkle/              compiler 0.31.1 from the source before the binding
+                            fixes (commit 179153f); they are replaced when the
+                            demo is redeployed.
 ```
 
 ## License

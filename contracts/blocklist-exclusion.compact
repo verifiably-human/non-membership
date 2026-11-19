@@ -141,6 +141,7 @@ export circuit proveNotBlocked(): [] {
 
   // Step 1: Prove membership in the legitimate user registry
   const path = getRegistryPath(pk);
+  assert(path.leaf == pk, "Member path is not for this key");
   const root = merkleTreePathRoot<10, Bytes<32>>(path);
   assert(registry.checkRoot(disclose(root)), "Not a registered user");
 

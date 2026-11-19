@@ -35,7 +35,7 @@ for contract in "${CONTRACTS[@]}"; do
   out_dir="compiled/$out_name"
 
   echo "==> Compiling contracts/$contract.compact → $out_dir"
-  compact compile "contracts/$contract.compact" "$out_dir"
+  compact compile +0.36.1 "contracts/$contract.compact" "$out_dir"
   echo ""
 done
 
