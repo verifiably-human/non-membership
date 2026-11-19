@@ -23,7 +23,7 @@
 
 import {
   persistentHash,
-  convertFieldToBytes,
+  convertBigintToBytes,
   CompactTypeVector,
   CompactTypeBytes,
 } from '@midnight-ntwrk/compact-runtime';
@@ -46,7 +46,7 @@ function padDomain(s: string): Uint8Array {
 }
 
 function keyBytes(key: bigint): Uint8Array {
-  return convertFieldToBytes(32, key, 'indexed-merkle-tree.ts');
+  return convertBigintToBytes(32, key, 'indexed-merkle-tree.ts');
 }
 
 function hashLeafStruct(leaf: IndexedLeaf): Uint8Array {

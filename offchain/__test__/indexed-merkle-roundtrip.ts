@@ -7,7 +7,7 @@
 
 import {
   persistentHash,
-  convertFieldToBytes,
+  convertBigintToBytes,
   CompactTypeBytes,
   CompactTypeVector,
 } from '@midnight-ntwrk/compact-runtime';
@@ -38,8 +38,8 @@ function foldRoot(
 ): Uint8Array {
   let acc = persistentHash(VEC3, [
     LEAF_DOMAIN,
-    convertFieldToBytes(32, low.key, 'roundtrip'),
-    convertFieldToBytes(32, low.nextKey, 'roundtrip'),
+    convertBigintToBytes(32, low.key, 'roundtrip'),
+    convertBigintToBytes(32, low.nextKey, 'roundtrip'),
   ]);
   for (let i = 0; i < siblings.length; i++) {
     acc = directions[i]

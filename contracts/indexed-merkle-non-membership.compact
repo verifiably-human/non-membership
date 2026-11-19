@@ -166,6 +166,7 @@ export circuit proveNonMembership(target: Uint<248>): [] {
 
   // Step 1: Anonymous member check
   const path = getMemberPath(pk);
+  assert(path.leaf == pk, "Member path is not for this key");
   const root = merkleTreePathRoot<10, Bytes<32>>(path);
   assert(members.checkRoot(disclose(root)), "Not a registered member");
 
@@ -208,6 +209,7 @@ export circuit proveMembership(target: Uint<248>): [] {
 
   // Step 1: Anonymous member check
   const path = getMemberPath(pk);
+  assert(path.leaf == pk, "Member path is not for this key");
   const root = merkleTreePathRoot<10, Bytes<32>>(path);
   assert(members.checkRoot(disclose(root)), "Not a registered member");
 

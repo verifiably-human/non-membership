@@ -115,6 +115,7 @@ circuit verifySparseMemberAndPath(element: Bytes<32>): Bytes<32> {
 
   // Anonymous member check
   const path = getMemberPath(pk);
+  assert(path.leaf == pk, "Member path is not for this key");
   const root = merkleTreePathRoot<10, Bytes<32>>(path);
   assert(members.checkRoot(disclose(root)), "Not a registered member");
 
@@ -123,6 +124,12 @@ circuit verifySparseMemberAndPath(element: Bytes<32>): Bytes<32> {
   const leafValue = proof[0];
   const siblings = proof[1];
   const directions = proof[2];
+
+  // The witness path must lead to the element's own slot, H("sparse:pos:", element).
+  const slot = persistentHash<Vector<2, Bytes<32>>>([pad(32, "sparse:pos:"), element]);
+  const pathSlot = fold((acc: Field, goesRight: Boolean): Field => acc * 2 + (goesRight ? 1 : 0) as Field,
+                        0 as Field, directions);
+  assert(pathSlot == slot[0] as Field, "Sparse path is not at the element's position");
 
   // Fold leaf to root. Multi-vector fold iterates over siblings and
   // directions in lockstep. The accumulator carries the running hash
@@ -196,5 +203,8 @@ export circuit proveNonMembership(element: Bytes<32>): [] {
 export circuit proveMembership(element: Bytes<32>): [] {
   const leafValue = verifySparseMemberAndPath(element);
   assert(leafValue != pad(32, ""), "Leaf is empty — element is NOT in the set");
+  // Slots are shared (8-bit positions), so the leaf must be this element's own marker.
+  assert(leafValue == persistentHash<Vector<2, Bytes<32>>>([pad(32, ""), element]),
+         "Leaf belongs to another element");
   proofCount.increment(1);
 }
